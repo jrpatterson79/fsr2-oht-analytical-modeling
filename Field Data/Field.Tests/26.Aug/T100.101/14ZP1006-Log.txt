@@ -1,0 +1,27 @@
+8/26/2019 4:10:56 PM	Error on command - AcqData -.
+SendAndReceive number of retry overstepped.
+Retry number 0
+The write timed out.
+Retry number 1
+The write timed out.
+Retry number 2
+The write timed out.
+
+8/26/2019 4:11:17 PM	Error on command - AcqData -.
+SendAndReceive number of retry overstepped.
+Retry number 0
+The write timed out.
+Retry number 1
+The write timed out.
+Retry number 2
+The write timed out.
+
+8/26/2019 4:11:32 PM	Error on command - AcqData -.
+SendAndReceive number of retry overstepped.
+Retry number 0
+The write timed out.
+Retry number 1
+The write timed out.
+Retry number 2
+The write timed out.
+
