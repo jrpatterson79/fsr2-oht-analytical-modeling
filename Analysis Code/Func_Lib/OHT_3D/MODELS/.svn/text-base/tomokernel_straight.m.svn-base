@@ -1,0 +1,257 @@
+function J = tomokernel_straight(data,xb,yb,varargin)
+
+% tomokernel_straight: This function computes the length of a ray through
+% cells of a grid, given positions of the source (xs,ys,[zs]) and receiver
+% (xr,yr,[zr])and vectors defining the positions of the cell *BOUNDARIES*.
+% The code thus produces the sensitivity matrix (of travel time to
+% velocities) for GPR or seismic data under the straight-ray approximation.
+%
+% J = tomokernel_straight(data,xb,yb,[zb])
+% where:
+%   -J (numdata x (nx*ny*nz)) is the sparse sensitivity matrix containing
+%   lengths of ray passing through each cell of the defined grid.
+%
+%   NOTE: Each row of J gives sensitivites for one test. The row of J is
+%   is organized such that it loops through Y *first*, then loops through
+%   *X*, then loops through *Z* (if applicable). This is analogous to how
+%   coordinates are incremented in meshgrid for 2D and 3D problems. To
+%   create a plotable sensitivity, simply plot
+%   **reshape(J(i,:),ny,nx)** or **reshape(J(i,:),ny,nx,nz)**
+%
+%   -data is a (numdata x (2*dim+1)) matrix, where numdata is the number of
+%   datapoints (travel times) collected, and dim is the dimension of the
+%   problem (2 or 3). The columns of data are as follows: for 2D problems,
+%   [xs ys xr yr time] or for 3D problems [xs ys zs xr yr zr time].
+%   -xb is a ((nx+1) x 1) monotonically increasing vector giving the x
+%   values of boundaries for the grid, where nx is the number of cells in
+%   the grid
+%   -yb is a ((ny+1) x 1) monotonically increasing vector giving the y
+%   values of boundaries for the grid, where ny is the number of cells in
+%   the grid
+%   -zb (Optional) is a ((nz+1) x 1) monotonically increasing vector giving
+%   the z values of boundaries for the grid, where nz is the number of
+%   cells in the grid
+%
+% 2D code used as basis by James Irving
+% December 2005
+% Code re-written for inclusion of 3D and non-uniform grids 
+% by Michael Cardiff
+% April 2010
+
+
+%Define constants, counts, etc. for easier addressing
+dim = (size(data,2) - 1)/2;
+num_rays = size(data,1);
+xb_min = xb(1); xb_max = xb(end); nx = numel(xb) - 1;
+yb_min = yb(1); yb_max = yb(end); ny = numel(yb) - 1;
+zb = [];
+if nargin > 3
+    zb = varargin{1};
+    zb_min = zb(1); zb_max = zb(end); nz = numel(zb) - 1;
+end
+
+if dim == 3
+    if isempty(zb)
+        error('Four arguments must be given this function if 3D data is used');
+    end
+    xs_list = data(:,1); ys_list = data(:,2); zs_list = data(:,3);
+    xr_list = data(:,4); yr_list = data(:,5); zr_list = data(:,6);
+    test1 = sum(xs_list < xb_min);
+    test2 = sum(xr_list < xb_min);
+    test3 = sum(xs_list > xb_max);
+    test4 = sum(xr_list > xb_max);
+    test5 = sum(ys_list < yb_min);
+    test6 = sum(yr_list < yb_min);
+    test7 = sum(ys_list > yb_max);
+    test8 = sum(yr_list > yb_max);
+    test9 = sum(zs_list < zb_min);
+    test10 = sum(zr_list < zb_min);
+    test11 = sum(zs_list > zb_max);
+    test12 = sum(zr_list > zb_max);
+    if test1 || test2 || test3 || test4 || test5 || test6 || test7 || ...
+             test8 || test9 || test10 || test11 || test12
+         error('Sources and/or receivers are outside of the defined grid');
+    end
+else
+    xs_list = data(:,1); ys_list = data(:,2);
+    xr_list = data(:,3); yr_list = data(:,4); 
+    test1 = sum(xs_list < xb_min);
+    test2 = sum(xr_list < xb_min);
+    test3 = sum(xs_list > xb_max);
+    test4 = sum(xr_list > xb_max);
+    test5 = sum(ys_list < yb_min);
+    test6 = sum(yr_list < yb_min);
+    test7 = sum(ys_list > yb_max);
+    test8 = sum(yr_list > yb_max);
+    if test1 || test2 || test3 || test4 || test5 || test6 || test7 || ...
+             test8 
+         error('Sources and/or receivers are outside of the defined grid');
+    end
+end
+clear test*
+
+if dim == 3
+    max_ints = nx+ny+nz;
+    max_elems = max_ints*num_rays;
+    num_cells = nx*ny*nz;
+    sp_rowvec = zeros(max_elems,1);
+    sp_colvec = zeros(max_elems,1);
+    sp_valvec = zeros(max_elems,1);
+    curr_elem = 1;
+    
+    %Pre-allocation to maximum sizes possible. Should save time during
+    %repeated calls
+    new_xtaus = zeros(size(xb));
+    new_ytaus = zeros(size(yb));
+    new_ztaus = zeros(size(zb));
+    tau_orderints = zeros(max_ints,1);
+    loc_ints = zeros(max_ints,3);
+    rp_lengths = zeros(max_ints-1,1);
+    rp_midpts = zeros(max_ints-1,1);
+    
+    for k = 1:1:num_rays
+        %Source and receiver locations
+        xs = xs_list(k); ys = ys_list(k); zs = zs_list(k);
+        xr = xr_list(k); yr = yr_list(k); zr = zr_list(k);
+        %Changes in location per change in tau (pseudo-time)
+        xper = (xr-xs);
+        yper = (yr-ys);
+        zper = (zr-zs);
+        
+        %Can have at most nx + ny + nz cell intersections, I think. Plus 2
+        %for the end points
+        tau_ints = zeros(max_ints+2,1);
+        %Two points should be considered as "intersections" always, the
+        %starting and ending locations.
+        tau_ints([1 2]) = [0 1];
+        num_ints = 2;
+        
+        %Next, find other intersections with the grid.
+        x_ints = ((xb > min(xs,xr)) & (xb < max(xs,xr)));
+        num_newints = sum(x_ints);
+        if num_newints ~= 0
+            new_xtaus = (xb(x_ints) - xs)./xper;
+            tau_ints((num_ints+1):1:(num_ints+num_newints)) = new_xtaus;
+            num_ints = num_ints + num_newints;
+        end
+    
+        y_ints = ((yb > min(ys,yr)) & (yb < max(ys,yr)));
+        num_newints = sum(y_ints);
+        if num_newints ~= 0
+            new_ytaus = (yb(y_ints) - ys)./yper;
+            tau_ints((num_ints+1):1:(num_ints+num_newints)) = new_ytaus;
+            num_ints = num_ints + num_newints;
+        end
+
+        z_ints = ((zb > min(zs,zr)) & (zb < max(zs,zr)));
+        num_newints = sum(z_ints);
+        if num_newints ~= 0
+            new_ztaus = (zb(z_ints) - zs)./zper;
+            tau_ints((num_ints+1):1:(num_ints+num_newints)) = new_ztaus;
+            num_ints = num_ints + num_newints;
+        end
+
+        %Find the full list of unique intersections (including 0 & 1 tau),
+        %and find the locations and midpoints of each ray piece. 
+        %NOTE: These vectors and matrices can change size each for each k,
+        %which is why they are pre-allocated at the beginning of the code.
+        tau_orderints = unique(sort(tau_ints(1:num_ints)));
+        num_orderints = numel(tau_orderints);
+        loc_ints = [(xs + tau_orderints.*xper) (ys + tau_orderints.*yper) (zs + tau_orderints.*zper)];
+        rp_lengths = (sum((loc_ints(2:end,:) - loc_ints(1:(end-1),:)).^2,2)).^.5;
+        rp_midpts = (loc_ints(2:end,:) + loc_ints(1:(end-1),:))./2;
+       
+        %Figure out which cells are affected, fill in non-zero elements of
+        %jacobian matrix
+        for m = 1:1:(num_orderints-1)
+            cellx = find((rp_midpts(m,1) < xb),1) - 1;
+            celly = find((rp_midpts(m,2) < yb),1) - 1;
+            cellz = find((rp_midpts(m,3) < zb),1) - 1;
+            sp_rowvec(curr_elem) = k;
+            sp_colvec(curr_elem) = celly + ny*(cellx-1) + nx*ny*(cellz-1);
+            sp_valvec(curr_elem) = rp_lengths(m);
+            curr_elem = curr_elem + 1;
+        end
+        k
+            
+    end
+    
+    J = sparse(sp_rowvec(1:(curr_elem-1)),sp_colvec(1:(curr_elem-1)),...
+        sp_valvec(1:(curr_elem-1)),num_rays,num_cells);
+else
+    max_ints = nx+ny;
+    max_elems = max_ints*num_rays;
+    num_cells = nx*ny;
+    sp_rowvec = zeros(max_elems,1);
+    sp_colvec = zeros(max_elems,1);
+    sp_valvec = zeros(max_elems,1);
+    curr_elem = 1;
+    
+    %Pre-allocation for maximum size
+    new_xtaus = zeros(size(xb));
+    new_ytaus = zeros(size(yb));
+    tau_orderints = zeros(max_ints,1);
+    loc_ints = zeros(max_ints,2);
+    rp_lengths = zeros(max_ints-1,1);
+    rp_midpts = zeros(max_ints-1,1);
+    
+    for k = 1:1:num_rays
+        %Source and receiver locations
+        xs = xs_list(k); ys = ys_list(k);
+        xr = xr_list(k); yr = yr_list(k);
+        %Changes in location per change in tau (pseudo-time)
+        xper = (xr-xs);
+        yper = (yr-ys);
+        
+        %Can have at most nx + ny cell intersections, I think. Plus 2
+        %for the end points
+        tau_ints = zeros(max_ints+2,1);
+        %Two points should be considered as "intersections" always, the
+        %starting and ending locations.
+        tau_ints([1 2]) = [0 1];
+        num_ints = 2;
+        
+        %Next, find other intersections with the grid.
+        x_ints = ((xb > min(xs,xr)) & (xb < max(xs,xr)));
+        num_newints = sum(x_ints);
+        if num_newints ~= 0
+            new_xtaus = (xb(x_ints) - xs)./xper;
+            tau_ints((num_ints+1):1:(num_ints+num_newints)) = new_xtaus;
+            num_ints = num_ints + num_newints;
+        end
+    
+        y_ints = ((yb > min(ys,yr)) & (yb < max(ys,yr)));
+        num_newints = sum(y_ints);
+        if num_newints ~= 0
+            new_ytaus = (yb(y_ints) - ys)./yper;
+            tau_ints((num_ints+1):1:(num_ints+num_newints)) = new_ytaus;
+            num_ints = num_ints + num_newints;
+        end
+
+        %Find the full list of unique intersections (including 0 & 1 tau),
+        %and find the locations and midpoints of each ray piece. 
+        %NOTE: These vectors and matrices can change size each for each k,
+        %which is why they are pre-allocated at the beginning of the code.
+        tau_orderints = unique(sort(tau_ints(1:num_ints)));
+        num_orderints = numel(tau_orderints);
+        loc_ints = [(xs + tau_orderints.*xper) (ys + tau_orderints.*yper)];
+        rp_lengths = (sum((loc_ints(2:end,:) - loc_ints(1:(end-1),:)).^2,2)).^.5;
+        rp_midpts = (loc_ints(2:end,:) + loc_ints(1:(end-1),:))./2;
+       
+        %Figure out which cells are affected, fill in non-zero elements of
+        %jacobian matrix
+        for m = 1:1:(num_orderints-1)
+            cellx = find((rp_midpts(m,1) < xb),1) - 1;
+            celly = find((rp_midpts(m,2) < yb),1) - 1;
+            sp_rowvec(curr_elem) = k;
+            sp_colvec(curr_elem) = celly + ny*(cellx-1);
+            sp_valvec(curr_elem) = rp_lengths(m);
+            curr_elem = curr_elem + 1;
+        end
+            
+    end
+    
+    J = sparse(sp_rowvec(1:(curr_elem-1)),sp_colvec(1:(curr_elem-1)),...
+        sp_valvec(1:(curr_elem-1)),num_rays,num_cells);
+
+end

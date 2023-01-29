@@ -1,0 +1,20 @@
+function [H_vec] = slugtest_sim_scaleshift(tlist,params,testconstants,scaleshiftparams)
+
+%scaleshiftparams are as follows
+%scaleshiftparams(1) = Re-scaling of height multiplier (no change = 1);
+%scaleshiftparams(2) = shifting of y (head) axis to accomodate any issues
+%choosing 0 head change value. (no change = 0)
+%
+%*NOTE: y shifting takes place AFTER y re-scaling.*
+%
+%scaleshiftparams(3) = shifting of x (time) axis to accomodate any issues
+%picking 0 time (no change = 0);
+tic
+Hscale = scaleshiftparams(1);
+Hshift = scaleshiftparams(2);
+tshift = scaleshiftparams(3);
+
+tlist = tlist - tshift;
+[Hnorm_vec] = slugtest_sim_skinertia(tlist,params,testconstants);
+H_vec = Hnorm_vec*Hscale + Hshift;
+toc

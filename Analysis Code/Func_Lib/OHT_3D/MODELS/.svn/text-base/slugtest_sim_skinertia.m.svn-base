@@ -1,0 +1,64 @@
+function [Hnorm_vec] = slugtest_sim_skinertia(tlist,params,testconstants)
+
+%slugtest_sim_skinertia: Code for calculating normalized head change over
+%time using the solution of Malama et al. (2010) based on extensions to the
+%Hyder et al. (1994) solution. This model takes into account both
+%small-radius well "skin" with different Kr/Kz/Ss values as well as
+%inertial effects within the borehole.
+%
+%Usage:
+% [Hnorm_vec] = slugtest_sim_skinertia(tlist,params,testconstants)
+%
+%where:
+%   -Hnorm_vec is a (numt x 1) output vector containing normalized head
+%   changes expected at each time
+%   -tlist is a (numt x 1) input vector containing the times at which
+%   results are desired
+%   -params (6 x 1) is a vector containing the variables in the following
+%   order [Kr2 Kz2 Ss2 Kr1 Kz1 Ss1] where Kr2 et al represent the values
+%   for the aquifer and Kr1 et al represent the values for the well skin
+%   -testconstants is a (6 x 1) input vector containing values that are
+%   generally assumed "constant" per test (note, though, that these can be
+%   treated as parameters in an inversion). The vector is as follows: [l d
+%   r_w r_sk r_c B], where each constant is as defined in Malama et al.
+%   (2010)
+%
+% Solution & Original coding by B. Malama
+% Code optimization & reformatting by M. Cardiff
+
+
+l = testconstants(1);
+d = testconstants(2);
+r_w = testconstants(3);
+r_sk = testconstants(4);
+r_c = testconstants(5);
+B = testconstants(6);
+b = l-d;
+
+Kr2 = exp(params(1));
+Kz2 = exp(params(2));
+Ss2 = exp(params(3));
+Kr1 = exp(params(4));
+Kz1 = exp(params(5));
+Ss1 = exp(params(6));
+
+P=length(tlist);
+Tc = (r_c^2)/(Kr2*b);
+Hnorm_vec = zeros(P,1);
+parfor k=1:P
+    t = tlist(k);
+    tD = t/Tc;
+    if(t<2.0)
+        tmax = 2.0;
+    else
+        tmax = 20.0;
+    end
+    tDmax=tmax/Tc;
+    if (t == 0)
+        Hnorm_vec(k) = 1;
+    elseif (t < 0)
+        Hnorm_vec(k) = 0;
+    else
+        Hnorm_vec(k) = dehoog2(tD,tDmax,params,testconstants);
+    end
+end

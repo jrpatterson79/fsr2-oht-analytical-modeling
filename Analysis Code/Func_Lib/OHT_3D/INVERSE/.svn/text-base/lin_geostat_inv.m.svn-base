@@ -1,0 +1,29 @@
+function [s_hat, xi, beta] = lin_geostat_inv(y,X,R,Q,H)
+
+%lin_geostat_inv.m: Function used to compute the best estimate of
+%parameters given data for a linear forward model.
+%   [s_hat, xi, beta] = lin_invert_solve(y,X,R,Q,H)
+%   where:
+%       -y is the data. If solving a nonlinear case, y should be passed as
+%       y-h(s_tilde) + H*s_tilde
+%       -X is the assignment or drift matrix
+%       -R is the data covariance matrix
+%       -Q is the spatial covariance matrix of the parameters
+%       -H is the forward model (or sensitivity matrix, in the nonlinear
+%       case)
+
+
+m = size(y,1);
+n = size(Q,1);
+p = size(X,2);
+
+bigpsi = H*Q*H' + R;
+bigphi = H*X;
+
+xi_beta_vector = ([bigpsi, bigphi; bigphi', zeros(p,p)])\...
+    [y; zeros(p,1)];
+
+xi = xi_beta_vector(1:m);
+beta = xi_beta_vector(m+1:m+p);
+
+s_hat = X*beta + Q*H'*xi;

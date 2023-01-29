@@ -1,0 +1,63 @@
+function PHIbar_uc = hyder(p,params,testconstants)
+
+%hyder: Program to find the Laplace-transformed normalized source well
+%response to a slug injection, as described in Malama et al 2010 "Modeling
+%slug tests in unconfined aquifers taking into account source well skin and
+%inertial effects". This code calculates the value PHIbar_uc(p) as
+%described in the above paper. The solution must be back-converted using
+%the inverse laplace transform as used by the program dehoog2.
+%
+%Usage:
+%[PHIbar_uc] = hyder(p,params,testconstants);
+%where:
+%   -p (scalar) is the Laplace transform parameter
+%   -params (6 x 1) is a vector of aquifer parameters to be tried for
+%     test-fitting. params should be formatted as follows:
+%     params = [ln(Kr2) ln(Kz2) ln(Ss2) ln(Kr1) ln(Kz1) ln(Ss1)] where zone
+%     2 is the main aquifer and zone 1 is the wellbore skin.
+%   -testconstants (6 x 1) is a vector of constants that apply to the given
+%     test. testconstants should be formatted as follows:
+%     testconstants = [l d r_w r_sk r_c B]
+%
+%Solution by Hyder et al. and Malama et al.
+%Coding / optimization by M. Cardiff
+
+Kr2 = exp(params(1));
+Kz2 = exp(params(2));
+Ss2 = exp(params(3));
+Kr1 = exp(params(4));
+Kz1 = exp(params(5));
+Ss1 = exp(params(6));
+
+l = testconstants(1);
+d = testconstants(2);
+r_w = testconstants(3);
+r_sk = testconstants(4);
+r_c = testconstants(5);
+B = testconstants(6);
+
+N = 120; %Number of terms to calculate in Fourier series
+g = 9.81; %Acceleration due to gravity
+b = l-d; %Length of test interval
+
+gamma = Kr2/Kr1;
+beta = B/b;
+alpha = 2*b*Ss2*(r_w/r_c)^2;
+lambda = Ss2/Ss1;
+xi_sk = r_sk/r_w;
+A(1) = Kz1/Kr1;
+A(2) = Kz2/Kr2;
+a = b/r_w;
+zi = d/b;
+
+visc = 1.2e-6;
+Tc = (r_c^2)/(b*Kr2);
+L = d + ((r_c/r_w)^4)*(l-d)/2;
+Le = L + ((r_c/r_w)^2)*(l-d)/2;
+%Le = params(3);
+beta1 = 8*visc*L/(g*Tc*r_w^2);
+beta2 = Le/(g*Tc^2);
+
+%v = gamma*omega_star(N,beta,zi,xi_sk,p,A,a,gamma,alpha,lambda)/2;
+u = p*beta2 + beta1 + gamma*omega_star(N,beta,zi,xi_sk,p,A,a,gamma,alpha,lambda)/2;
+PHIbar_uc = u/(1+p*u);

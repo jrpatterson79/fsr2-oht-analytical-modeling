@@ -1,0 +1,23 @@
+function [sim_obs, varargout] = steady_poisson_obssens(test_obs_define,test_obs_weights,Ks,fluxes,x_struct,y_struct,z_struct)
+
+[A,b,phi,db_dAphi] = steady_poisson_form(Ks,fluxes,x_struct,y_struct,z_struct);
+
+num_obs = size(test_obs_define,1);
+num_cells = size(test_obs_weights,2);
+sim_obs = zeros(num_obs,1);
+for i = 1:1:num_obs
+    test_type = test_obs_define(i,1);
+    obs_type = test_obs_define(i,2);
+    sim_obs(i) = test_obs_weights(obs_type,:)*phi(:,test_type);
+end
+
+if nargout > 1
+    H = zeros(num_obs,num_cells);
+    lambda = A'\(test_obs_weights');
+    for i = 1:1:num_obs
+        test_type = test_obs_define(i,1);
+        obs_type = test_obs_define(i,2);
+        H(i,:) = lambda(:,obs_type)'*db_dAphi{test_type};
+    end
+    varargout{1} = H;
+end

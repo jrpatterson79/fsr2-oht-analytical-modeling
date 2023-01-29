@@ -1,0 +1,37 @@
+function om_star = omega_star(N,beta,zi,xi_sk,p,A,a,gamma,alpha,lambda)
+
+%omega_star: Function for computing the central \Omega* function defined by
+%Hyder et al. 1994 (equation B17). For more information on technical
+%details, see Malama et al 2010 "Modeling slug tests in unconfined aquifers
+%taking into account source well skin and inertial effects"
+%
+%Note: This function is a subfunction called by the function hyder.m, which
+%produces the Laplace transformed normalized well response solution. 
+%
+%Usage:
+%[om_star] = omega_star(N,beta,zi,xi_sk,p,A,a,gamma,alpha,lambda);
+%
+%Original code and formulation by B. Malama, ran at ~300 sec / full test
+%Code optimized to run at ~3 sec / full test (100x improvement) by M.
+%Cardiff
+
+w = (1:1:N)*pi/(2*beta);
+nu1 = sqrt((sqrt(A(1)).*w/a).^2 + gamma*alpha*p/(2*lambda));
+nu2 = sqrt((sqrt(A(2)).*w/a).^2 + alpha*p/2);
+bessk1nu2xi_sk = besselk(1,nu2*xi_sk);
+bessk0nu2xi_sk = besselk(0,nu2*xi_sk);
+eta = nu1./(gamma*nu2);
+
+delta1 = besselk(0,nu1*xi_sk).*bessk1nu2xi_sk - eta.*bessk0nu2xi_sk.*besselk(1,nu1*xi_sk);
+delta2 = besseli(0,nu1*xi_sk).*bessk1nu2xi_sk + eta.*bessk0nu2xi_sk.*besseli(1,nu1*xi_sk);
+
+A1 = delta2.*besselk(0,nu1);
+B1 = delta1.*besseli(0,nu1);
+
+A2 = delta2.*besselk(1,nu1);
+B2 = delta1.*besseli(1,nu1);
+
+f1sol = (A1-B1)./(nu1.*(A2+B2));
+
+%Test vectorization 1:1:N
+om_star = 16*beta*(sum((1+(-1).^((1:1:N)+1)).*f1sol(1:1:N).*(((sin((1:1:N).*pi/(4*beta)).*sin((1:1:N).*pi*(1+2*zi)/(4*beta)))./(1:1:N)).^2)))/(pi^2);

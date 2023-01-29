@@ -1,0 +1,187 @@
+function [out_funcs,varargout] = create_analyt3D_model(pack_array, test_array, K, varargin)
+
+%create_analyt3D_model: Function for creating analytic 3D model functions
+%of HT pumping tests given an array of packed-off locations, pumping
+%schedule, and parameters defining the aquifer geometry. Function is for
+%confined aquifers only (or unconfined aquifers in which small drawdown
+%applies), and can  return all results in terms of potential fields.
+%Syntax:
+%[phi_funcs, discharge_funcs] = create_analyt3D_model(pack_array,
+%test_array, K, [consthead_params], [regflow_params], [base_point],
+%[head_out])
+%where:
+%   -phi_funcs is a t x 1 cell array of functions where phi_funcs{i}
+%   gives the anonymous function for test i. By default, these functions
+%   give head values at any (x,y) point unless head_out (see below) is
+%   given as 0, in which case phi_funcs represent potential functions
+%   -discharge_funcs (optional) is a t x 2 cell array of functions where
+%   discharge_funcs{i,:} represents the depth-integrated discharge in x and
+%   y directions for test i.
+%   -pack_array is an array containing all packed-off location information.
+%   Should be a (w x 3) array where w is the number of packed-off
+%   locations. Columns correspond to x, y, and z coordinates.
+%   -test_array is an array containing pumping information for each test.
+%   Should be an (t x w) array, where t is the number of tests, w is the
+%   number of packed-off locations, and test_array(i,j) represents the flow
+%   rate (Q) at packed-off location j during test i. Positive Q corresponds
+%   to injection (source) terms.
+%   -K is the hydraulic conductivity.
+%   -consthead_params (optional) is a 1 x 4 vector giving the coefficients for
+%   a straight constant head boundary whose equation is ax + by + cz + d = 0.
+%   -regflow_params (optional) is a 1 x 3 vector giving the regional flow
+%   components. If a constant head boundary is also included in the system,
+%   then only the projection of the regional flow into the
+%   boundary-perpendicular plane is used.
+%   -base_point (optional) is a 1 x 4 vector giving the known or estimated
+%   head at a particular point in the aquifer. For example, if base_point =
+%   [0 0 0 10], then the flow field will satisfy that head = 10 at the
+%   origin during pumping conditions. Generally base_point should be at
+%   either a far distance from the pumping area, or on the constant head
+%   boundary.
+%   -head_out (optional) is a scalar indicating whether head should be
+%   reported or whether the formulas for flow should be left in untreated
+%   (potential) form. i.e., if head_out = 1 (default), then head is
+%   reported otherwise \Phi is reported.
+
+str_format = '%12.5e';
+
+%Default values
+head_out = 1;
+base_point = [];
+regflow_params = [];
+consthead_params = [];
+do_discharge = 0;
+K_arbitrary = false;
+
+num_reqin = 3;
+num_reqout = 1;
+
+%Process extra arguments if there are any
+if nargin > num_reqin
+    [consthead_params, regflow_params, base_point, head_out] = ...
+        process_extra_args(varargin,consthead_params, regflow_params, base_point, head_out);
+end
+
+if nargout > num_reqout
+    do_discharge = 1;
+end
+
+%If no K is supplied, make ending functions general for all K
+if isempty(K)
+    K_arbitrary = true;
+    clear K; syms K
+end
+
+num_tests = size(test_array,1);
+num_packs = size(pack_array,1);
+
+phi_funcs = cell(num_tests,1);
+PHI_funcs = cell(num_tests,1);
+
+syms x y z
+
+if do_discharge == true
+    discharge_funcs = cell(num_tests,2);
+end
+
+for i = 1:num_tests
+    test_text = '';
+    for j = 1:num_packs
+        %If flowrate for the packed-off location for the test is not 0, add it to the
+        %formula
+        if test_array(i,j) ~= 0
+            Q = test_array(i,j);
+            pump_x = pack_array(j,1);
+            pump_y = pack_array(j,2);
+            pump_z = pack_array(j,3);
+            test_text = [test_text, ' + (', num2str(Q,str_format), './(4.*pi)).*', ...
+                '1./((x-',num2str(pump_x,str_format),').^2 + ', ...
+                '(y-',num2str(pump_y,str_format),').^2 + ', ...
+                '(z-',num2str(pump_z,str_format),').^2).^.5'];
+            if ~isempty(consthead_params) %If there's a constant head boundary, add reflections
+                [image_pack] = reflect_nd([pump_x pump_y pump_z],consthead_params);
+                image_x = image_pack(1); image_y = image_pack(2); image_z = image_pack(3);
+                test_text = [test_text, ' - (', num2str(Q,str_format), './(4.*pi)).*', ...
+                '1./((x-',num2str(image_x,str_format),').^2 + ', ...
+                '(y-',num2str(image_y,str_format),').^2 + ', ...
+                '(z-',num2str(image_z,str_format),').^2).^.5'];
+            end
+        end
+    end
+
+    %Add regional flow terms
+    if ~isempty(regflow_params)
+        if ~isempty(consthead_params)
+            consthead_coeffs = consthead_params(1:3);
+            %Project into the constead head boundary-normal direction
+            regflow_projection = (consthead_coeffs*regflow_params')/(consthead_coeffs*consthead_coeffs')*consthead_coeffs;
+            regflow_params = regflow_projection;
+            test_text = [test_text, ' - ', ...
+                num2str(regflow_params(1),str_format), '.*x - ', ...
+                num2str(regflow_params(2),str_format), '.*y - ', ...
+                num2str(regflow_params(3),str_format), '.*z'];
+        else
+            test_text = [test_text, ' - ', ...
+                num2str(regflow_params(1),str_format), '.*x - ', ...
+                num2str(regflow_params(2),str_format), '.*y - ', ...
+                num2str(regflow_params(3),str_format), '.*z'];
+        end
+    end
+    
+    %Add the constant in if necessary
+    if ~isempty(base_point)
+        %Setup and run the potential function, to get the constant
+        pot_func_text = ['@(x,y,z) ', test_text, ';'];
+        pot_func = eval(pot_func_text);
+        curr = pot_func(base_point(1),base_point(2),base_point(3));
+        if K_arbitrary == true
+            obs = [num2str(base_point(4),str_format),'.*K'];
+            test_text = [test_text, ' + ', obs, ' - ', num2str(curr,str_format)];
+        else
+            obs = base_point(4)*K;
+            const = obs - curr;
+            test_text = [test_text, ' + ', num2str(const,str_format)];
+        end
+        clear pot_func
+    end
+
+    PHI_text = [test_text,';'];
+    PHI_funcs{i} = eval(PHI_text);
+    
+    if head_out ~= 0 %If head is requested (default)
+        if K_arbitrary == true
+            test_text = ['(', test_text, ')./K;'];
+        else
+            test_text = ['(', test_text, ')./', num2str(K,str_format)];
+        end
+    end
+    phi_funcs{i} = eval(test_text);
+              
+    if K_arbitrary == true
+        unknown_vars = 'x,y,z,K';
+    else
+        unknown_vars = 'x,y,z';
+    end
+    
+    if do_discharge == true
+        discharge_funcs{i,1} = -diff(PHI_funcs{i},x);
+        discharge_funcs{i,2} = -diff(PHI_funcs{i},y);
+        discharge_funcs{i,3} = -diff(PHI_funcs{i},z);
+        discharge_funcs{i,1} = sym2anon(discharge_funcs{i,1},unknown_vars);
+        discharge_funcs{i,2} = sym2anon(discharge_funcs{i,2},unknown_vars);
+        discharge_funcs{i,3} = sym2anon(discharge_funcs{i,3},unknown_vars);
+    end
+
+    PHI_funcs{i} = sym2anon(PHI_funcs{i},unknown_vars);
+    phi_funcs{i} = sym2anon(phi_funcs{i},unknown_vars);
+end
+
+if head_out == 0
+    out_funcs = PHI_funcs;
+else
+    out_funcs = phi_funcs;
+end
+
+if do_discharge == true
+    varargout{1} = discharge_funcs;
+end

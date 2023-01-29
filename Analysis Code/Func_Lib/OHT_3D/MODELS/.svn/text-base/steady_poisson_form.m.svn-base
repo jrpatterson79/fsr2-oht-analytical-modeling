@@ -1,0 +1,454 @@
+function [A,b,varargout] = steady_poisson_form(Ks,fluxes,x_struct,y_struct,z_struct)
+
+% steady_poisson_form: Function which forms the linear algebra problem
+% A*phi=b for the steady-state groundwater flow Poisson equation in 3D on a
+% finite-difference-type grid with a rectangular prism as boundary.
+% Boundary conditions of constant head or no flux may be applied at each of
+% the 6 surrounding boundaries, but must be constant across each face of
+% the rectangular prism.
+%
+% Notes:
+%   1) The unknowns in the 3D grid are mapped to a vector using the
+% standard method returned by meshgrid, i.e. phi =
+% reshape(phi_grid,num_cells,1), such that phi starts in the lower
+% South-west corner of the grid and increments through y first, then
+% through x, then through z.
+%   2) This code can also be used to solve 2D problems by setting the 3rd
+% dimension to have one layer with no flux boundaries on either side.
+%   3) This code uses a block-centered setup where inter-block conductances
+% are calculated assuming K_1 up to a cell boundary and K_2 after that cell
+% boundary, similar to MODFLOW. This results in inter-block conductances
+% that a function of geometric averages of neighboring blocks' K values.
+%   4) In a case with multiple tests, this code can produce multiple b
+% vectors corresponding to each test. To do this, K and boundary condition
+% types may not change, but input fluxes and boundary condition values may.
+%
+% Syntax:
+% [A,b,[phi]] = steady_poisson_form(Ks,fluxes,x_struct,y_struct,z_struct)
+% where:
+%   -[A,b] are the matrix (num_cells x num_cells) and vector (num_cells x
+%   1) such that solution of A*x=b gives the spatially-distributed head, x,
+%   in the domain. In a one-test case, b is a vector. In a multi-test case,
+%   b is a matrix (num_cells x num_tests) where each column represents a
+%   different test setup.
+%   -phi (optional) is the solution to A*phi = b, calculated using MATLAB's
+%   backslash (A\b). In a one-test case, phi is a vector with dimension
+%   (num_cells x 1). In a multi-test case, phi is a matrix (num_cells x
+%   num_tests) where each column represents the solution for a different
+%   test setup
+%   -Ks are the hydraulic conductivity values in the cells of the model, a
+%   (num_y x num_x x num_z) matrix, as would be produced from meshgridding
+%   the cell centers
+%   -fluxes (1 test case) are the mass fluxes into cells of the model from
+%   external sources and sinks, another (num_y x num_x x num_z) matrix as
+%   would be produced from meshgridding the cell centers. In a multi-test
+%   case, fluxes is a (num_y x num_x x num_z x num_tests) tensor where
+%   fluxes(:,:,:,i) contains the spatially-distributed fluxes for test i.
+%   -x_struct is a structure with 3 fields containing information about the
+%   x discretization of the model. x_struct should be setup as follows:
+%       -x_struct.cellbdrys is a ((num_x + 1) x 1) monotonically increasing
+%       vector containing the positions of cell boundaries along the x
+%       dimension
+%       -x_struct.bdrytypes is a (2 x 1) vector indicating the boundary
+%       types at the lower and upper boundaries, with 1 meaning constant
+%       head and 0 meaning no-flux. E.g., x_struct.bdrytypes = [0 1] means
+%       that there is a no-flux boundary at the smallest x value and a
+%       constant head boundary at the largest x value
+%       -x_struct.bdryvals: (1 test case) is a (2 x 1) vector giving the
+%       constant head values for any x boundaries that are designated
+%       constant head in x_struct.bdrytypes. If boundary types are
+%       designated as no-flux, the corresponding values in
+%       x_struct.bdryvals are ignored. In a multi-test case,
+%       x_struct.bdryvals is a (2 x num_tests) matrix where each row gives
+%       boundary conditions for a particular test setup.
+%   -y_struct and z_struct are structures containing the same information
+%   listed above for the y and z dimension, respectively.
+%
+% The problem dimension to be solved is num_cells, where num_cells = num_x
+% * num_y * num_z. Note num_x, num_y, and num_z are the number of CELLS in
+% each dimension, which is one less than the number of boundaries in each
+% dimension.
+%
+% Code by Michael Cardiff, 7/2010
+
+num_x = numel(x_struct.cellbdrys) - 1;
+num_y = numel(y_struct.cellbdrys) - 1;
+num_z = numel(z_struct.cellbdrys) - 1;
+num_cells = num_x*num_y*num_z;
+
+if (size(Ks,1) ~= num_y) || (size(Ks,2) ~= num_x) || (size(Ks,3) ~= num_z)
+    error('Ks must be num_y by num_x by num_z, i.e. matching the number of cells in each dimension');
+end
+if (size(fluxes,1) ~= num_y) || (size(fluxes,2) ~= num_x) || (size(fluxes,3) ~= num_z)
+    error('fluxes must be num_y by num_x by num_z, i.e. matching the number of cells in each dimension');
+end
+
+xcellbdry = x_struct.cellbdrys;
+ycellbdry = y_struct.cellbdrys;
+zcellbdry = z_struct.cellbdrys;
+
+xtypes = x_struct.bdrytypes;
+ytypes = y_struct.bdrytypes;
+ztypes = z_struct.bdrytypes;
+
+xbvals = x_struct.bdryvals;
+ybvals = y_struct.bdryvals;
+zbvals = z_struct.bdryvals;
+
+
+dx = xcellbdry(2:end) - xcellbdry(1:(end-1));
+dy = ycellbdry(2:end) - ycellbdry(1:(end-1));
+dz = zcellbdry(2:end) - zcellbdry(1:(end-1));
+
+%Setup so that all cell size vectors are column vectors. Needs to be
+%standardized to match dimensions of vectorization later.
+if size(dx,1) == 1
+    dx = dx';
+end
+if size(dy,1) == 1
+    dy = dy';
+end
+if size(dz,1) == 1
+    dz = dz';
+end
+
+%Check sizes on boundary value vectors. Return errors if necessary
+if size(xbvals,1) ~= 2
+    error('x_struct.bdryvals does not have the correct size')
+end
+if size(ybvals,1) ~= 2
+    error('y_struct.bdryvals does not have the correct size')
+end
+if size(zbvals,1) ~= 2
+    error('z_struct.bdryvals does not have the correct size')
+end
+
+num_tests = size(fluxes,4);
+if size(xbvals,2) ~= num_tests;
+    error('x_struct.bdryvals does not appear to have boundary conditions for each test');
+end
+if size(ybvals,2) ~= num_tests;
+    error('y_struct.bdryvals does not appear to have boundary conditions for each test');
+end
+if size(zbvals,2) ~= num_tests;
+    error('z_struct.bdryvals does not appear to have boundary conditions for each test');
+end
+
+%Note for all reshapes below: Due to the way reshape operates, vector of
+%unknowns will start from lower-SW corner of the domain and increment
+%through Y first, then X, then Z. In other words, starting from lower-SW
+%corner, we travel north, then east, then up during incrementing.
+
+%SECTION: Calculate all coefficients associated with inter-cell mass
+%transfer
+A_coldiags = zeros(num_cells,7);
+%Using cell i,j,k as the center of the stencil, derive coefficients for
+%flux in from western side of stencil (i.e., -j direction).
+%Formula: flux into (i,j,k) from west 
+% = Conductance(i,j-.5,k)*(h(i,j-1,k) - h(i,j,k))
+A_west = zeros(num_y,num_x,num_z);
+for j = 2:1:(num_x)
+    for k = 1:1:(num_z)
+        A_west(:,j,k) = 2*(Ks(:,j,k).*Ks(:,j-1,k).*dy*dz(k)) ...
+            ./(Ks(:,j,k)*dx(j-1) + Ks(:,j-1,k)*dx(j));
+        %A_west(:,j,k) = 1; %For testing ordering
+    end
+end
+A_coldiags(:,1) = reshape(A_west,num_cells,1);
+% clear A_west
+%Using cell i,j,k as the center of the stencil, derive coefficients for
+%flux in from eastern side of stencil (i.e., +j direction).
+%Formula: flux into (i,j,k) from east 
+% = Conductance(i,j+.5,k)*(h(i,j+1,k) - h(i,j,k))
+A_east = zeros(num_y,num_x,num_z);
+for j = 1:1:(num_x-1)
+    for k = 1:1:(num_z)
+        A_east(:,j,k) = 2*(Ks(:,j,k).*Ks(:,j+1,k).*dy*dz(k)) ...
+            ./(Ks(:,j,k)*dx(j+1) + Ks(:,j+1,k)*dx(j));
+        %A_east(:,j,k) = 2; %For testing ordering
+    end
+end
+A_coldiags(:,2) = reshape(A_east,num_cells,1);
+% clear A_east
+%Using cell i,j,k as the center of the stencil, derive coefficients for
+%flux in from southern side of stencil (i.e., -i direction).
+%Formula: flux into (i,j,k) from south
+% = Conductance(i-.5,j,k)*(h(i-1,j,k) - h(i,j,k))
+A_south = zeros(num_y,num_x,num_z);
+for i = 2:1:(num_y)
+    for k = 1:1:(num_z)
+        A_south(i,:,k) = 2*(Ks(i,:,k).*Ks(i-1,:,k).*dx'*dz(k)) ...
+            ./(Ks(i,:,k)*dy(i-1) + Ks(i-1,:,k)*dy(i));
+        %A_south(i,:,k) = 3; %For testing ordering
+    end
+end
+A_coldiags(:,3) = reshape(A_south,num_cells,1);
+% clear A_south
+%Using cell i,j,k as the center of the stencil, derive coefficients for
+%flux in from northern side of stencil (i.e., +i direction).
+%Formula: flux into (i,j,k) from north
+% = Conductance(i+.5,j,k)*(h(i+1,j,k) - h(i,j,k))
+A_north = zeros(num_y,num_x,num_z);
+for i = 1:1:(num_y-1)
+    for k = 1:1:(num_z)
+        A_north(i,:,k) = 2*(Ks(i,:,k).*Ks(i+1,:,k).*dx'*dz(k)) ...
+            ./(Ks(i,:,k)*dy(i+1) + Ks(i+1,:,k)*dy(i));
+        %A_north(i,:,k) = 4; %For testing ordering
+    end
+end
+A_coldiags(:,4) = reshape(A_north,num_cells,1);
+% clear A_north
+%Using cell i,j,k as the center of the stencil, derive coefficients for
+%flux in from lower side of stencil (i.e., -k direction).
+%Formula: flux into (i,j,k) from bottom
+% = Conductance(i,j,k-.5)*(h(i,j,k-1) - h(i,j,k))
+A_bottom = zeros(num_y,num_x,num_z);
+for k = 2:1:(num_z)
+    for j = 1:1:(num_x)
+        A_bottom(:,j,k) = 2*(Ks(:,j,k).*Ks(:,j,k-1).*dy*dx(j)) ...
+            ./(Ks(:,j,k)*dz(k-1) + Ks(:,j,k-1)*dz(k));
+        %A_bottom(:,j,k) = 5; %For testing ordering
+    end
+end
+A_coldiags(:,5) = reshape(A_bottom,num_cells,1);
+% clear A_bottom
+%Using cell i,j,k as the center of the stencil, derive coefficients for
+%flux in from top side of stencil (i.e., +k direction).
+%Formula: flux into (i,j,k) from bottom
+% = Conductance(i,j,k+.5)*(h(i,j,k+1) - h(i,j,k))
+A_top = zeros(num_y,num_x,num_z);
+for k = 1:1:(num_z-1)
+    for j = 1:1:(num_x)
+        A_top(:,j,k) = 2*(Ks(:,j,k).*Ks(:,j,k+1).*dy*dx(j)) ...
+            ./(Ks(:,j,k)*dz(k+1) + Ks(:,j,k+1)*dz(k));
+        %A_top(:,j,k) = 6; %For testing ordering
+    end
+end
+A_coldiags(:,6) = reshape(A_top,num_cells,1);
+% clear A_top
+%Main diagonal is negative sum of all conductances, before considering
+%boundary conditions
+A_coldiags(:,7) = -sum(A_coldiags,2);
+
+%Note: The section above could only have west, top, and north computed and
+%then use symmetry of A. However, this may degrade readability, and does
+%not increase computational cost much at all (main computational cost is
+%use of spdiags below)
+
+%SECTION: Calculate all coefficients associated with boundary conditions
+bc_coeffmat = sparse(num_cells,6);
+bc_coeff_west = zeros(num_y,num_x,num_z);
+if xtypes(1) == 1
+    for k = 1:1:num_z
+        bc_coeff_west(:,1,k) = 2.*Ks(:,1,k).*dy*dz(k)/dx(1);
+    end
+end
+bc_coeffmat(:,1) = reshape(bc_coeff_west,num_cells,1);
+% clear bc_coeff_west
+bc_coeff_east = zeros(num_y,num_x,num_z);
+if xtypes(2) == 1
+    for k = 1:1:num_z
+        bc_coeff_east(:,end,k) = 2.*Ks(:,end,k).*dy*dz(k)/dx(end);
+    end
+end
+bc_coeffmat(:,2) = reshape(bc_coeff_east,num_cells,1);
+% clear bc_coeff_east
+bc_coeff_south = zeros(num_y,num_x,num_z);
+if ytypes(1) == 1
+    for k = 1:1:num_z
+        bc_coeff_south(1,:,k) = 2.*Ks(1,:,k).*dx'*dz(k)/dy(1);
+    end
+end
+bc_coeffmat(:,3) = reshape(bc_coeff_south,num_cells,1);
+% clear bc_coeff_south
+bc_coeff_north = zeros(num_y,num_x,num_z);
+if ytypes(2) == 1
+    for k = 1:1:num_z
+        bc_coeff_north(end,:,k) = 2.*Ks(end,:,k).*dx'*dz(k)/dy(end);
+    end
+end
+bc_coeffmat(:,4) = reshape(bc_coeff_north,num_cells,1);
+% clear bc_coeff_north
+
+%Leave out this part if the problem is 2D
+if num_z > 1
+    bc_coeff_bottom = zeros(num_y,num_x,num_z);
+    if ztypes(1) == 1
+        for j = 1:1:num_x
+            bc_coeff_bottom(:,j,1) = 2.*Ks(:,j,1).*dy*dx(j)/dz(1);
+        end
+    end
+    bc_coeffmat(:,5) = reshape(bc_coeff_bottom,num_cells,1);
+    % clear bc_coeff_bottom
+    bc_coeff_top = zeros(num_y,num_x,num_z);
+    if ztypes(2) == 1
+        for j = 1:1:num_x
+            bc_coeff_top(:,j,end) = 2.*Ks(:,j,end).*dy*dx(j)/dz(end);
+        end
+    end
+    bc_coeffmat(:,6) = reshape(bc_coeff_top,num_cells,1);
+    % clear bc_coeff_top
+end
+
+Kvec = reshape(Ks,num_cells,1);
+b = zeros(num_cells,num_tests);
+for t = 1:1:num_tests
+    fluxvec = reshape(fluxes(:,:,:,t),num_cells,1);
+    b(:,t) = -fluxvec - bc_coeffmat*[xbvals(:,t); ybvals(:,t); zbvals(:,t)];
+end
+
+%DEFINE A
+A = spalloc(num_cells,num_cells,7*num_cells);
+A_coldiags(:,7) = A_coldiags(:,7) - bc_coeffmat*ones(6,1);
+%spdiags does diagonals in a somewhat strange way. This results in
+%diagonals where the first elements of the input vector are cut off if
+%placed above the main diagonal, and the last elements of the input vector
+%are cut off if placed below the main daigonal. In order to get the
+%behavior we want (which is exactly opposite), diagonals are placed
+%opposite to where they should be, and then transposed.
+A = spdiags(A_coldiags,[num_y -num_y 1 -1 num_y*num_x -num_y*num_x 0],A);
+A = A';
+%Immediately southern cells actually end up on first sub-diagonal
+%Immediately northern cells actually end up on first super-diagonal, etc.
+
+%If 3 output arguments, phi is the 3rd output
+if nargout > 2
+    phi = A\b;
+    varargout{1} = phi;
+end
+
+%If 4 output arguments, the last is the sensitivity coefficient stuff
+if nargout > 3
+    %Calculate the coefficients for all off-diagonal coefficients of dA*phi
+    dAphi_coeffs = zeros(num_cells,6);
+    dAphi_coeffs_bottom = zeros(num_y,num_x,num_z);
+    for k = 2:1:(num_z)
+        for j = 1:1:(num_x)
+            dAphi_coeffs_bottom(:,j,k) = 2*Ks(:,j,k-1).^2.*dy*dx(j)*dz(k)./ ...
+                ((Ks(:,j,k)*dz(k-1) + Ks(:,j,k-1)*dz(k)).^2);
+        end
+    end
+    dAphi_coeffs(:,1) = reshape(dAphi_coeffs_bottom,num_cells,1);
+    dAphi_coeffs_west = zeros(num_y,num_x,num_z);
+    for j = 2:1:(num_x)
+        for k = 1:1:(num_z)
+            dAphi_coeffs_west(:,j,k) = 2*Ks(:,j-1,k).^2.*dy*dx(j)*dz(k)./ ...
+                ((Ks(:,j,k)*dx(j-1) + Ks(:,j-1,k)*dx(j)).^2);
+        end
+    end
+    dAphi_coeffs(:,2) = reshape(dAphi_coeffs_west,num_cells,1);
+    dAphi_coeffs_south = zeros(num_y,num_x,num_z);
+    for i = 2:1:(num_y)
+        for k = 1:1:(num_z)
+            dAphi_coeffs_south(i,:,k) = 2*Ks(i-1,:,k).^2.*dx'*dy(i)*dz(k)./ ...
+                ((Ks(i,:,k)*dy(i-1) + Ks(i-1,:,k)*dy(i)).^2);
+        end
+    end
+    dAphi_coeffs(:,3) = reshape(dAphi_coeffs_south,num_cells,1);
+    dAphi_coeffs_north = zeros(num_y,num_x,num_z);
+    for i = 1:1:(num_y-1)
+        for k = 1:1:(num_z)
+            dAphi_coeffs_north(i,:,k) = 2*Ks(i+1,:,k).^2.*dx'*dy(i)*dz(k)./ ...
+                ((Ks(i,:,k)*dy(i+1) + Ks(i+1,:,k)*dy(i)).^2);
+        end
+    end
+    dAphi_coeffs(:,4) = reshape(dAphi_coeffs_north,num_cells,1);
+    dAphi_coeffs_east = zeros(num_y,num_x,num_z);
+    for j = 1:1:(num_x-1)
+        for k = 1:1:(num_z)
+            dAphi_coeffs_east(:,j,k) = 2*Ks(:,j+1,k).^2.*dy*dx(j)*dz(k)./ ...
+                ((Ks(:,j,k)*dx(j+1) + Ks(:,j+1,k)*dx(j)).^2);
+        end
+    end
+    dAphi_coeffs(:,5) = reshape(dAphi_coeffs_east,num_cells,1);
+    dAphi_coeffs_top = zeros(num_y,num_x,num_z);
+    for k = 1:1:(num_z-1)
+        for j = 1:1:(num_x)
+            dAphi_coeffs_top(:,j,k) = 2*Ks(:,j,k+1).^2.*dy*dx(j)*dz(k)./ ...
+                ((Ks(:,j,k)*dz(k+1) + Ks(:,j,k+1)*dz(k)).^2);
+        end
+    end
+    dAphi_coeffs(:,6) = reshape(dAphi_coeffs_top,num_cells,1);
+    
+    dbc_coeffs = sparse(num_cells,6);
+    dbc_coeff_west = zeros(num_y,num_x,num_z);
+    if xtypes(1) == 1
+        for k = 1:1:num_z
+            dbc_coeff_west(:,1,k) = 2.*dy*dz(k)/dx(1);
+        end
+    end
+    dbc_coeffs(:,1) = reshape(dbc_coeff_west,num_cells,1);
+    dbc_coeff_east = zeros(num_y,num_x,num_z);
+    if xtypes(2) == 1
+        for k = 1:1:num_z
+            dbc_coeff_east(:,end,k) = 2.*dy*dz(k)/dx(end);
+        end
+    end
+    dbc_coeffs(:,2) = reshape(dbc_coeff_east,num_cells,1);
+    dbc_coeff_south = zeros(num_y,num_x,num_z);
+    if ytypes(1) == 1
+        for k = 1:1:num_z
+            dbc_coeff_south(1,:,k) = 2.*dx'*dz(k)/dy(1);
+        end
+    end
+    dbc_coeffs(:,3) = reshape(dbc_coeff_south,num_cells,1);
+    dbc_coeff_north = zeros(num_y,num_x,num_z);
+    if ytypes(2) == 1
+        for k = 1:1:num_z
+            dbc_coeff_north(end,:,k) = 2.*dx'*dz(k)/dy(end);
+        end
+    end
+    dbc_coeffs(:,4) = reshape(dbc_coeff_north,num_cells,1);
+    if num_z > 1
+        dbc_coeff_bottom = zeros(num_y,num_x,num_z);
+        if ztypes(1) == 1
+            for j = 1:1:num_x
+                dbc_coeff_bottom(:,j,1) = 2.*dy*dx(j)/dz(1);
+            end
+        end
+        dbc_coeffs(:,5) = reshape(dbc_coeff_bottom,num_cells,1);
+        dbc_coeff_top = zeros(num_y,num_x,num_z);
+        if ztypes(2) == 1
+            for j = 1:1:num_x
+                dbc_coeff_top(:,j,end) = 2.*dy*dx(j)/dz(end);
+            end
+        end
+        dbc_coeffs(:,6) = reshape(dbc_coeff_top,num_cells,1);
+    end
+    db_dAphi = cell(num_tests,1);
+    for t = 1:1:num_tests
+        db_dAphi_diags = zeros(num_cells,7);
+        phi_curr = phi(:,t);
+        phic = reshape(phi_curr,num_y,num_x,num_z);
+        %Create and initialize all offset-phi arrays
+        phiw = zeros(num_y,num_x,num_z);
+        phin = phiw; phis = phiw; phie = phiw; phit = phiw; phib = phiw;
+        phis(2:end,:,:) = phic(1:(end-1),:,:); phis = reshape(phis,num_cells,1);
+        phin(1:(end-1),:,:) = phic(2:end,:,:); phin = reshape(phin,num_cells,1);
+        phiw(:,2:end,:) = phic(:,1:(end-1),:); phiw = reshape(phiw,num_cells,1);
+        phie(:,1:(end-1),:) = phic(:,2:end,:); phie = reshape(phie,num_cells,1);
+        phib(:,:,2:end) = phic(:,:,1:(end-1)); phib = reshape(phib,num_cells,1);
+        phit(:,:,1:(end-1)) = phic(:,:,2:end); phit = reshape(phit,num_cells,1);
+        phic = reshape(phic,num_cells,1);
+        
+        %Non-main diagonals of db-dAphi (no contribution from db, so these are equal to
+        %-dA*phi)
+        db_dAphi_diags(:,1) = dAphi_coeffs(:,1).*(phib - phic);
+        db_dAphi_diags(:,2) = dAphi_coeffs(:,2).*(phiw - phic);
+        db_dAphi_diags(:,3) = dAphi_coeffs(:,3).*(phis - phic);
+        db_dAphi_diags(:,5) = dAphi_coeffs(:,4).*(phin - phic);
+        db_dAphi_diags(:,6) = dAphi_coeffs(:,5).*(phie - phic);
+        db_dAphi_diags(:,7) = dAphi_coeffs(:,6).*(phit - phic);
+        %Main diagonal of db-dAphi. db contributes to main diagonal (first
+        %term), and effect of boundary conditions also affects main
+        %diagonal of dA*phi (last term)
+        db_dAphi_diags(:,4) = -dbc_coeffs*[xbvals(:,t); ybvals(:,t); zbvals(:,t)] ...
+            -sum(db_dAphi_diags,2) + dbc_coeffs*ones(6,1).*phic;
+        
+        db_dAphi{t} = spdiags(db_dAphi_diags, ...
+            [num_x*num_y num_y 1 0 -1 -num_y -num_x*num_y],...
+            sparse(num_cells,num_cells));
+        
+    end
+    varargout{2} = db_dAphi;
+end

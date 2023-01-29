@@ -1,0 +1,143 @@
+function [s_best, H_local, negloglike] = ql_geostat_inv(y,s_init,X,R,Q,h_function,H_tilde_func, varargin)
+
+%ql_geostat_inv.m: Inverse problem solver using Kitanidis' Quasi-linear
+%geostatistical method. 
+% Syntax:
+% [s_best, H_local, negloglike] =
+% ql_geostat_inv(y,s_init,X,R,Q,forward_function,sensitivity_function,...)
+% In everything below:
+% m = number of observations
+% n = number of parameter values
+% p = number of parameters in geostatistical trend (1)
+% s_init should be a n by 1 list of initial parameter value guesses
+% y should be a  m by 1 list of observed values
+% Q should by an n by n correlation matrix for the parameter values
+% R should be an m by m matrix of measurement error
+% X should be an n by p matrix.
+% h_function should be an anonymous function with one argument (input of
+% parameter values)
+% sensitivity_function should be a string that is interpreted as the
+% sensitivity function, and has output of an m x n sensitivity matrix.
+%
+% Any other variables (i.e., those necessary for evaluation of
+% sensitivity_function or forward_function) can be passed after the
+% sensitivity function argument as follows:
+% ...,'fem',fem,'max_linsearch',10,...
+%
+% Arguments used by ql_invert_solve which can be passed in this section:
+%    -max_linsearch: Maximum number of steps in linesearch optimization
+%    -max_gradevals: Maximum number of gradient evaluations (maximum number
+%    of iterations, in essence).
+%    -tol_objfunc: Relative tolerance in the objective function change
+%    (percent decrease)
+%    -tol_s: Relative tolerance in the change in the value of s (root mean
+%    square difference from last iteration).
+%    -tol_linsearch: Relative tolerance in the change of the objective
+%    function during the linesearch optimization (if used)
+
+%Create global variables - in case function crashes due to memory or other
+%errors, these variables can still be accessed outside of this program.
+global H_tilde
+global s_hat
+start_time = clock;
+
+%Default values for all constants
+max_linsearch = 30;
+max_gradevals = 20;
+tol_objfunc = .001;
+tol_s = .001;
+tol_linsearch = .001;
+m = size(y,1);
+n = size(s_init,1);
+p = size(X,2);
+Qinv = inv(Q);
+Rinv = inv(R);
+G = Qinv - Qinv*X*inv(X'*Qinv*X)*X'*Qinv;
+s_tilde = s_init;
+s_hat = s_tilde;
+
+%Load auxilliary variables
+num_additional = nargin - 7;
+if num_additional > 0
+    if mod(num_additional,2) == 0
+        for i = 1:2:num_additional
+            eval([varargin{i}, ' = varargin{', num2str(i+1), '};']);
+        end
+    else
+        error('Wrong number of additional arguments');
+    end
+end
+
+%h_function should be of this form:
+%'@(x) my_script(fem,unk_func_num,solve_string,meas_array,x)'
+% h_function = eval(forward_function);
+% H_tilde_func = eval(sensitivity_function);
+
+%This will need to be changed later - NOT SURE it works for all R matrices.
+%Done in this syntax so that h_function only gets called once.
+negloglike_func = @(s) .5*sum(((y-h_function(s))'*(Rinv^.5)).^2) + .5*s'*G*s;
+
+negloglike = negloglike_func(s_tilde);
+negloglikenew = negloglike;
+
+objfunc_pct = (negloglike - negloglikenew)/negloglike
+s_pct = (sum(abs(s_tilde - s_hat)./s_tilde))/size(s_tilde,1)
+
+num_gradevals = 0;
+while ((objfunc_pct > tol_objfunc) && (s_pct > tol_s)) || (num_gradevals == 0)
+    
+    format short
+    elapsed = etime(clock, start_time);
+
+    s_tilde = s_hat;
+
+    negloglike = negloglikenew;
+    disp('Iteration         Time Elapsed        Obj. Func');
+    disp([num2str(num_gradevals), '      ', num2str(elapsed), '       ', num2str(negloglike)]);
+
+    H_tilde = H_tilde_func(s_tilde);
+    num_gradevals = num_gradevals + 1;
+
+    h_of_s_tilde = h_function(s_tilde);
+    [s_hat, xi, beta] = lin_geostat_inv((y-h_of_s_tilde+H_tilde*s_tilde),X,R,Q,H_tilde);
+
+    negloglikenew = negloglike_func(s_hat);
+
+    if max_linsearch > 0
+
+        clear linsearch_func
+        linsearch_func = @(x) negloglike_func(s_tilde + (s_hat - s_tilde).*x);
+        if negloglikenew < negloglike
+            disp('Performing linesearch, starting at s_hat');
+            lin_options = optimset('MaxIter', max_linsearch,'Display','iter','TolFun',tol_linsearch*negloglikenew);
+            step = fminsearch(linsearch_func,1,lin_options)
+        else
+            disp('Performing linesearch, starting at s_tilde');
+            lin_options = optimset('MaxIter', max_linsearch,'Display','iter','TolFun',tol_linsearch*negloglike);
+            step = fminsearch(linsearch_func,0,lin_options)
+        end
+        s_hat = s_tilde + step.*(s_hat - s_tilde);
+        negloglikenew = negloglike_func(s_hat);
+    end
+        
+    objfunc_pct = (negloglike - negloglikenew)/negloglike
+    s_pct = max(abs((s_tilde - s_hat)./s_tilde))
+    
+    %Added for debugging / saving latest progress. Cut if desired
+%     save latest_best
+
+end
+
+if negloglikenew < negloglike
+    s_best = s_hat;
+    H_local = H_tilde_func(s_hat);
+    negloglike = negloglikenew;    
+else
+    s_best = s_tilde;
+    H_local = H_tilde;
+end
+
+finish_time = clock;
+elapsed = etime(finish_time,start_time);
+disp('Iteration         Time Elapsed        Obj. Func');
+disp([num2str(num_gradevals), '      ', num2str(elapsed), '       ', num2str(negloglike)]);

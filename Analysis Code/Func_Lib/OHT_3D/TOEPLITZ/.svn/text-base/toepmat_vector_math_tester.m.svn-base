@@ -1,0 +1,132 @@
+clear all; close all; clc
+
+%% 1D testing of realizations - cholesky vs. toepmat_vector_math
+
+x = (linspace(0,10,100))';
+
+GCF_func = @(dist) 0.5.*exp(-(dist./6));
+
+dist = eucdist(x);
+dist_firstrow = eucdist(x(1),x);
+
+Q = GCF_func(dist);
+Q_firstrow = GCF_func(dist_firstrow);
+
+%%
+
+Q_pf = (chol(Q))';
+num_relztries = 20;
+for i = 1:1:num_relztries
+    relz = Q_pf*randn(100,1);
+    figure(1)
+    subplot(1,3,[1 2])
+    plot(x,relz);
+    axis([0 10 -2 2])
+    subplot(1,3,3)
+    hist(relz)
+    axis([-3 3 0 30])
+    figure(2)
+    [relz_toep] = toepmat_vector_math(Q_firstrow,'r',[],1,100);
+    relz_toep = relz_toep(:,1);
+    subplot(1,3,[1 2])
+    plot(x,relz_toep);
+    axis([0 10 -2 2])
+    subplot(1,3,3)
+    hist(relz_toep)
+    axis([-3 3 0 30])
+    pause
+end
+
+%% 2D testing of realizations - cholesky vs. toepmat_vector_math
+
+x = (linspace(0,10,20))';
+y = (linspace(0,10,15))';
+
+[xg, yg] = meshgrid(x,y);
+xv = reshape(xg,numel(xg),1);
+yv = reshape(yg,numel(yg),1);
+
+posvec = [xv yv];
+
+GCF_func = @(ddist) 0.5.*exp(-(((ddist(:,:,1)./30).^2 + (ddist(:,:,2)./3).^2).^.5));
+
+posdist = dimdist(posvec);
+posdist_firstrow = dimdist(posvec(1,:),posvec);
+
+Q = GCF_func(posdist);
+Q_firstrow = GCF_func(posdist_firstrow);
+
+%%
+
+Q_pf = (chol(Q))';
+num_relztries = 20;
+for i = 1:1:num_relztries
+    relz = Q_pf*randn(20*15,1);
+    figure(1)
+    subplot(1,3,[1 2])
+    pcolor(xg,yg,reshape(relz,15,20));
+    axis([0 10 0 10])
+    subplot(1,3,3)
+    hist(relz)
+%     axis([-3 3 0 30])
+    figure(2)
+    [relz_toep] = toepmat_vector_math(Q_firstrow,'r',[],2,[15 20]);
+    relz_toep = relz_toep(:,1);
+    subplot(1,3,[1 2])
+    pcolor(xg,yg,reshape(relz_toep,15,20));
+    axis([0 10 0 10])
+    subplot(1,3,3)
+    hist(relz_toep)
+%     axis([-3 3 0 30])
+    pause
+end
+
+%% 2D testing of realizations - cholesky vs. toepmat_vector_math
+
+x = (linspace(0,10,20))';
+y = (linspace(0,10,15))';
+z = (linspace(0,10,10))';
+
+[xg, yg, zg] = meshgrid(x,y,z);
+xv = reshape(xg,numel(xg),1);
+yv = reshape(yg,numel(yg),1);
+zv = reshape(zg,numel(zg),1);
+
+posvec = [xv yv zv];
+
+GCF_func = @(ddist) 2.*exp(-(((ddist(:,:,1)./30).^2 + (ddist(:,:,2)./3).^2 + (ddist(:,:,3)./3).^2).^.5));
+
+posdist = dimdist(posvec);
+posdist_firstrow = dimdist(posvec(1,:),posvec);
+
+Q = GCF_func(posdist);
+Q_firstrow = GCF_func(posdist_firstrow);
+
+%%
+
+Q_pf = (chol(Q))';
+num_relztries = 20;
+for i = 1:1:num_relztries
+    relz = Q_pf*randn(20*15*10,1);
+    figure(1)
+    subplot(1,3,[1 2])
+    slice(xg,yg,zg,reshape(relz,15,20,10),[5],[],[5]);
+    axis([0 10 0 10 0 10])
+    view(-40,40)
+    subplot(1,3,3)
+    hist(relz)
+%     axis([-3 3 0 30])
+    figure(2)
+    [relz_toep] = toepmat_vector_math(Q_firstrow,'r',[],3,[15 20 10]);
+    relz_toep = relz_toep(:,1);
+    subplot(1,3,[1 2])
+    slice(xg,yg,zg,reshape(relz_toep,15,20,10),[5],[],[5]);
+    axis([0 10 0 10 0 10])
+    view(-40,40)
+    subplot(1,3,3)
+    hist(relz_toep)
+%     axis([-3 3 0 30])
+    pause
+end
+
+

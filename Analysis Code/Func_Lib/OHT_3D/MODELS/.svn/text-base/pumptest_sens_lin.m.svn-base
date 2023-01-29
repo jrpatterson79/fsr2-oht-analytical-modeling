@@ -1,0 +1,152 @@
+function H = pumptest_sens_lin(well_array, test_array, meas_array, log10K, confined, X_grid, Y_grid, varargin)
+
+%pumptest_sens_lin: Generates the (linear) sensitivity matrix for
+%a pumptest, starting from an initial model of a homogeneous field.
+%H =
+%pumptest_sens_lin(well_array,test_array,meas_array,log10K,confined,
+%X_grid,Y_grid,[river_params],[regflow_params],[base_point],[method])
+%where:
+%   -well_array is an array containing the well locations - a (w x 2)
+%   matrix where w is the number of wells and coordinates are stored [x y]
+%   -test_array is an array of tests being performed - a (t x w) matrix
+%   where t is the number of tests and w is the number of wells. element
+%   test_array(i,j) represents the pumping rate at well j during test i
+%   -meas_array is an array of measurements at wells (should be
+%   non-pumping) - an (n x 2) array where meas_array(i,1) is the test
+%   number being performed and meas_array(i,2) is the location of
+%   measurement
+%   -log10K represents the log10(K) where K is hydraulic conductivity
+%   -confined is 0 if the aquifer is unconfined, or the thickness if the
+%   aquifer is confined.
+%   -X_grid represents the x location of grid boundaries (finite difference
+%   style discretization)
+%   -Y_grid represents the y location of grid boundaries (finite difference
+%   style discretization)
+%   -river_params (optional) represents parameters controlling the location
+%   of any rivers (see create_analyt2D_pumpmodel for more info)
+%   -regflow_params (optional) represents parameters controlling the
+%   regional flow of the model (see create_analyt2D_pumpmodel for more info)
+%   -base_point (optional) gives a point at which the head is known for the
+%   system. Ideally should either be located on a river, or at far distance
+%   from the system (see create_analyt2D_pumpmodel for more info)
+%   -method (optional) determines how the sensitivity integral is computed.
+%   1 = numerical integration with quadl, 2 = grid center value * dx * dy
+%   estimate. default value is 2 (much faster)
+
+
+river_params = [];
+regflow_params = [];
+base_point = [];
+head_out = 0;
+method = 2;
+
+num_reqin = 7;
+
+if nargin > num_reqin
+    [river_params, regflow_params, base_point, method] = ...
+        process_extra_args(varargin,river_params, regflow_params, base_point, method);
+end
+
+num_X = numel(X_grid)-1;
+num_Y = numel(Y_grid)-1;
+
+num_blocks = (num_X)*(num_Y);
+num_tests = size(test_array,1);
+num_meas = size(meas_array,1);
+num_wells = size(well_array,1);
+H = zeros(num_meas, num_blocks);
+K = 10^(log10K);
+thickness = confined;
+
+river_sidecheck = zeros(num_wells,1);
+if ~isempty(river_params)
+    a = river_params(1); b = river_params(2); c = river_params(3);
+    for j = 1:num_wells
+        river_sidecheck(j) = sign(a*well_array(j,1)+b*well_array(j,2)+c);
+    end
+    if abs(sum(river_sidecheck)) ~= num_wells
+        error('All wells must be on the same side of a river, and cannot be located on the river')
+    else
+        realdomain_sign = river_sidecheck(1);
+    end
+end
+
+tic
+[PHI_funcs, discharge_funcs] = create_analyt2D_pumpmodel(well_array, test_array, K, confined, ...
+    river_params,regflow_params,base_point,head_out);
+for i = 1:num_meas
+    clear dPHIdx dPHYdy dpsidx dpsidy sens_func
+    disp(['Generating sensitivity for measurement # ', num2str(i)]);
+
+    test_num = meas_array(i,1);
+    well_num = meas_array(i,2);
+    
+    meas_x = well_array(well_num,1);
+    meas_y = well_array(well_num,2);
+    
+    PHI = PHI_funcs{test_num};
+    
+    if confined > 0
+        Q_adj = 1/thickness;
+    else
+        Q_adj = (2*PHI(meas_x,meas_y)/K)^(-1/2);
+    end
+
+    [psi_funcs, psi_discharge_funcs] = create_analyt2D_pumpmodel([meas_x meas_y], [Q_adj], K, 1, ...
+        river_params,[],[],1);
+   
+    %OLD code - actually faster, but also less compact
+%     if ~isempty(river_params)
+%         [meas_refl] = reflect_nd([meas_x meas_y],river_params);
+%         meas_refl_x = meas_refl(1); meas_refl_y = meas_refl(2);
+%         dpsidx = @(x,y) Q_adj/2/pi/K.*(x-meas_x)./((x-meas_x).^2+(y-meas_y).^2) + ...
+%             Q_adj/2/pi/K.*(x-meas_refl_x)./((x-meas_refl_x).^2+(y-meas_refl_y).^2);
+%         dpsidy = @(x,y) Q_adj/2/pi/K.*(y-meas_y)./((x-meas_x).^2+(y-meas_y).^2) + ...
+%             Q_adj/2/pi/K.*(y-meas_refl_y)./((x-meas_refl_x).^2+(y-meas_refl_y).^2);
+%     else
+%         dpsidx = @(x,y) Q_adj/2/pi/K.*(x-meas_x)./((x-meas_x).^2+(y-meas_y).^2);
+%         dpsidy = @(x,y) Q_adj/2/pi/K.*(y-meas_y)./((x-meas_x).^2+(y-meas_y).^2);
+%     end
+    
+    %Adjoint state-defined sensitivity function. Can be evaluated
+    %analytically when K is a constant as in this case.
+    if ~isempty(river_params)
+        sens_func = @(x,y) ( - psi_discharge_funcs{1,1}(x,y)./K.*log(10).*discharge_funcs{test_num,1}(x,y) ...
+            - psi_discharge_funcs{1,2}(x,y)./K.*log(10).*discharge_funcs{test_num,2}(x,y)) ...
+            .*(heaviside(realdomain_sign.*(a.*x + b.*y + c)));
+    else
+        sens_func = @(x,y) ( - psi_discharge_funcs{1,1}(x,y)./K.*log(10).*discharge_funcs{test_num,1}(x,y) ...
+            - psi_discharge_funcs{1,2}(x,y)./K.*log(10).*discharge_funcs{test_num,2}(x,y));
+    end
+        
+    %Middle loop - scan through y, starting at lowest value
+    %NOTE - This part may actually end up in different ordering if method 1
+    %is used (due to way meshgrid does meshing)
+    if method == 1
+        for j = 1:num_Y
+            yl = Y_grid(j); yu = Y_grid(j+1);
+            %Inner loop - scan through x, starting at lowest value
+            for k = 1:num_X
+                xl = X_grid(k); xu = X_grid(k+1);
+                H(i,(j-1).*(num_X)+k) = dblquad(sens_func,xl,xu,yl,yu);
+            end
+        end
+    else
+        x_mids = zeros(num_X,1);
+        y_mids = zeros(num_Y,1);
+        dx = zeros(num_X,1);
+        dy = zeros(num_Y,1);
+        %Compute midpoints (centers) of each unknown cell and size
+        x_mids = (X_grid(1:num_X) + X_grid(2:(num_X+1)))./2;
+        dx = X_grid(2:(num_X+1)) - X_grid(1:num_X);
+        y_mids(1:num_Y) = (Y_grid(1:num_Y) + Y_grid(2:(num_Y+1)))./2;
+        dy = Y_grid(2:(num_Y+1)) - Y_grid(1:num_Y);
+        [x_mids, y_mids] = meshgrid(x_mids,y_mids);
+        [dx,dy] = meshgrid(dx,dy);
+        %Approximate integral using central value
+        int_sens = sens_func(x_mids,y_mids).*dx.*dy;
+        H(i,:) = reshape(int_sens,1,numel(int_sens));
+    end
+
+end
+toc

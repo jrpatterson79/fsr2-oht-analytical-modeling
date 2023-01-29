@@ -1,0 +1,201 @@
+function [out_funcs,varargout] = create_analyt2D_pumpmodel(well_array, test_array, K, confined, varargin)
+
+%create_analyt2D_pumpmodel: Function for creating analytic 2D model functions
+%of pumping tests given an array of well locations, pumping schedule, and
+%parameters defining the aquifer geometry. Function is general for confined
+%and unconfined aquifers, and can also return all results in terms of
+%potential fields.
+%Syntax:
+%[phi_funcs, discharge_funcs] = create_analyt2D_pumpmodel(well_array,
+%test_array, K, confined, [river_params], [regflow_params], [base_point],
+%[head_out])
+%where:
+%   -phi_funcs is a t x 1 cell array of functions where phi_funcs{i}
+%   gives the anonymous function for test i. By default, these functions
+%   give head values at any (x,y) point unless head_out (see below) is
+%   given as 0, in which case phi_funcs represent potential functions
+%   -discharge_funcs (optional) is a t x 2 cell array of functions where
+%   discharge_funcs{i,:} represents the depth-integrated discharge in x and
+%   y directions for test i.
+%   -well_array is an array containing all well information. Should be a (w
+%   x 2) array where w is the number of wells. Columns correspond to x and
+%   y coordinates.
+%   -test_array is an array containing pumping information for each test.
+%   Should be an (t x w) array, where t is the number of tests, w is the
+%   number of wells, and test_array(i,j) represents the flow rate (Q) at
+%   well j during test i. Positive Q corresponds to injection (source)
+%   terms.
+%   -K is the hydraulic conductivity.
+%   -confined is a scalar representing the thickness if the aquifer is
+%   confined. If confined is set to 0, this represents an unconfined
+%   aquifer.
+%   -river_params (optional) is a 1 x 3 vector giving the coefficients for
+%   a straight river whose equation is ax + by + c = 0.
+%   -regflow_params (optional) is a 1 x 2 vector giving the regional flow
+%   components. If a river is also included in the system, then only the
+%   projection of the regional flow into the river-perpendicular plane is
+%   used.
+%   -base_point (optional) is a 1 x 3 vector giving the known or estimated
+%   head at a particular point in the aquifer. For example, if base_point =
+%   [0 0 10], then the flow field will satisfy that head = 10 at the origin
+%   during pumping conditions. Generally base_point should be at either a
+%   far distance from the pumping area, or on the river boundary.
+%   -head_out (optional) is a scalar indicating whether head should be
+%   reported or whether the formulas for flow should be left in untreated
+%   (potential) form. i.e., if head_out = 1 (default), then head is
+%   reported otherwise \Phi is reported.
+
+str_format = '%12.5e';
+
+%Default values
+head_out = 1;
+base_point = [];
+regflow_params = [];
+river_params = [];
+do_discharge = 0;
+K_arbitrary = false;
+
+thickness = confined; %Improves readability in code later
+
+num_reqin = 4;
+num_reqout = 1;
+
+%Process extra arguments if there are any
+if nargin > num_reqin
+    [river_params, regflow_params, base_point, head_out] = ...
+        process_extra_args(varargin,river_params, regflow_params, base_point, head_out);
+end
+
+if nargout > num_reqout
+    do_discharge = 1;
+end
+
+%If no K is supplied, make ending functions general for all K
+if isempty(K)
+    K_arbitrary = true;
+    clear K; syms K
+end
+
+num_tests = size(test_array,1);
+num_wells = size(well_array,1);
+
+phi_funcs = cell(num_tests,1);
+PHI_funcs = cell(num_tests,1);
+
+syms x y
+
+if do_discharge == true
+    discharge_funcs = cell(num_tests,2);
+end
+
+for i = 1:num_tests
+    test_text = '';
+    for j = 1:num_wells
+        %If flowrate for the well for the test is not 0, add it to the
+        %formula
+        if test_array(i,j) ~= 0
+            Q = test_array(i,j);
+            pump_x = well_array(j,1);
+            pump_y = well_array(j,2);
+            test_text = [test_text, ' - (', num2str(Q,str_format), './(4.*pi)).*', ...
+                'log((x-',num2str(pump_x,str_format),').^2 + (y-',num2str(pump_y,str_format),').^2)'];
+            if ~isempty(river_params) %If there's a river, add reflections
+                [image_well] = reflect_nd([pump_x pump_y],river_params);
+                image_x = image_well(1); image_y = image_well(2);
+                test_text = [test_text, ' + (', num2str(Q,str_format), './(4.*pi)).*', ...
+                'log((x-',num2str(image_x,str_format),').^2 + (y-',num2str(image_y,str_format),').^2)'];
+            end
+        end
+    end
+
+    %Add regional flow terms
+    if ~isempty(regflow_params)
+        if ~isempty(river_params)
+            river_coeffs = river_params(1:2);
+            %Project into the river-normal direction
+            regflow_projection = (river_coeffs*regflow_params')/(river_coeffs*river_coeffs')*river_coeffs;
+            regflow_params = regflow_projection;
+            test_text = [test_text, ' - ', num2str(regflow_params(1),str_format), ...
+                '.*x - ', num2str(regflow_params(2),str_format), '.*y'];
+        else
+            test_text = [test_text, ' - ', num2str(regflow_params(1),str_format), ...
+                '.*x - ', num2str(regflow_params(2),str_format), '.*y'];
+        end
+    end
+    
+    %Add the constant in if necessary
+    if ~isempty(base_point)
+        %Setup and run the potential function, to get the constant
+        pot_func_text = ['@(x,y) ', test_text, ';'];
+        pot_func = eval(pot_func_text);
+        curr = pot_func(base_point(1),base_point(2));
+        if K_arbitrary == true
+            if confined > 0
+                obs = [num2str(base_point(3),str_format),'.*K.*', ...
+                    num2str(thickness,str_format)];
+            else
+                obs = ['.5.*K.*', num2str(base_point(3),str_format), '.^2'];
+            end
+            test_text = [test_text, ' + ', obs, ' - ', num2str(curr,str_format)];
+        else
+            if confined > 0
+                obs = base_point(3)*K*thickness;
+            else
+                obs = .5*K*base_point(3)^2;
+            end
+            const = obs - curr;
+            test_text = [test_text, ' + ', num2str(const,str_format)];
+        end
+        clear pot_func
+    end
+
+    PHI_text = [test_text,';'];
+    PHI_funcs{i} = eval(PHI_text);
+    
+    %compute values of head for confined / unconfined case if necessary
+    if head_out ~= 0 %If head is requested (default)
+        if K_arbitrary == true
+            if confined > 0 %If confined aquifer, PHI = K*h*phi
+                test_text = ['(', test_text, ')./(K.*', ...
+                    num2str(thickness,str_format), ');'];
+            else %If unconfined aquifer, PHI = .5*K*phi^2
+                test_text = ['(2.*(', test_text, ')./K).^.5;'];
+            end
+        else
+            if confined > 0 %If confined aquifer, PHI = K*h*phi
+                test_text = ['(', test_text, ')./(', num2str(K,str_format), ...
+                    '.*', num2str(thickness,str_format), ');'];
+            else %If unconfined aquifer, PHI = .5*K*phi^2
+                test_text = ['(2.*(', test_text, ')./', num2str(K,str_format), ...
+                    ').^.5;'];
+            end
+        end
+    end
+    phi_funcs{i} = eval(test_text);
+              
+    if K_arbitrary == true
+        unknown_vars = 'x,y,K';
+    else
+        unknown_vars = 'x,y';
+    end
+    
+    if do_discharge == true
+        discharge_funcs{i,1} = -diff(PHI_funcs{i},x);
+        discharge_funcs{i,2} = -diff(PHI_funcs{i},y);
+        discharge_funcs{i,1} = sym2anon(discharge_funcs{i,1},unknown_vars);
+        discharge_funcs{i,2} = sym2anon(discharge_funcs{i,2},unknown_vars);
+    end
+
+    PHI_funcs{i} = sym2anon(PHI_funcs{i},unknown_vars);
+    phi_funcs{i} = sym2anon(phi_funcs{i},unknown_vars);
+end
+
+if head_out == 0
+    out_funcs = PHI_funcs;
+else
+    out_funcs = phi_funcs;
+end
+
+if do_discharge == true
+    varargout{1} = discharge_funcs;
+end
