@@ -22,4 +22,4 @@ The code and data are provided as open source under the GNU General Public Licen
 ## References
 Patterson, Jeremy R., and M. Cardiff. 2022. Aquifer Characterization and Uncertainty in Multi-Frequency Oscillatory Flow Tests: Approach and Insights. Groundwater 60, no. 2: 180–191, https://doi.org/10.1111/gwat.13134.
 
-Patterson, Jeremy R., and M. Cardiff. 2023. Do Simple Analytical Models Capture Complex Frature Hydraulics? Oscillatory Flow Tests Suggest Not. Groundwater _Accepted_ , https://doi.org
+Patterson, Jeremy R., and M. Cardiff. 2023. Do Simple Analytical Models Capture Complex Frature Hydraulics? Oscillatory Flow Tests Suggest Not. Groundwater, https://doi.org/10.1111/gwat.13297
