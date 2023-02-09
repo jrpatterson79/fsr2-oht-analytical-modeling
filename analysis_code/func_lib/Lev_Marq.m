@@ -1,9 +1,11 @@
 function varargout = Lev_Marq(test_list, s, y, R_inv, lambda_init, delta, soln, varargin)
     
-% Lev_Marq: This function conducts non-linear gradient inversion using the Levenberg-Marquardt algorithm. The inversion uses the fully-confined or leaky-confined analytical models developed by Rasmussen et al. (2003) as the forward model.
+% Lev_Marq: This function conducts non-linear gradient inversion using the Levenberg-Marquardt algorithm. 
+% The inversion uses the fully-confined or leaky-confined analytical models developed by Rasmussen et al. (2003) as the forward model.
 
 % Inputs:
-%   test_list (num_obs x 4) - Matrix where each row contains the necessary information of a single oscillatory flow test to generate phasor coefficients for a given set of %                             parameters. The columns are [Period(s) omega(1/s) Q_max(m^3/s) Radial distance(m)]
+%   test_list (num_obs x 4) - Matrix where each row contains the necessary information of a single oscillatory flow test to generate phasor coefficients for a given set of                        
+%                             parameters. The columns are [Period(s) omega(1/s) Q_max(m^3/s) Radial distance(m)]
 %   s (num_param x 1) - column vector containing the initial parameter guesses. 
 %       Confined - [ln(T); ln(S)]
 %       Leaky - [ln(T); ln(S); ln(L)]

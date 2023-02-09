@@ -112,10 +112,10 @@ phase_oht = atan2(-B_syn, A_syn);
 %% Fully confined analytical solution (Rasmussen et al. (2003))
 soln = 'confined';
 
-syn_data(:,1) = (2*pi) ./ test_list(:,1); %Stimulation period
-syn_data(:,2) = test_list(:,1); %Angular Frequency
-syn_data(:,3) = test_list(:,3); %Max Pumping Rate
-syn_data(:,4) = r(test_list(:,4)); %Radial Distance
+syn_data(:,1) = (2*pi) ./ test_list(:,1); % Stimulation period (s)
+syn_data(:,2) = test_list(:,1);           % Angular Frequency (rad/s)
+syn_data(:,3) = test_list(:,3);           % Max Pumping Rate (m^3/s)
+syn_data(:,4) = r(test_list(:,4));        % Inter-well spacing (m)
 
 for k = 1 : numel(syn_data(:,1))
     y_ana(k,:) = RasSoln(syn_data(k,:), [lnT; lnS], soln);

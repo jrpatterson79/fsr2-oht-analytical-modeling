@@ -1,6 +1,7 @@
 function [J] = jacob(p, delta, test_list, soln)
 
-% jacob: This function computes the Jacobian (i.e., parameter sensitivity) matrix for T and S (confined analysis) or T, S, and L (leaky analysis) using the analytical solutions % developed by Rasmussen et al., (2013). The Jacobian is then used in linearized error propagation to quantify the uncertainty of estimated aquifer parameters. 
+% jacob: This function computes the Jacobian (i.e., parameter sensitivity) matrix for T and S (confined analysis) or T, S, and L (leaky analysis) using the analytical solutions 
+% developed by Rasmussen et al., (2013). The Jacobian is then used in linearized error propagation to quantify the uncertainty of estimated aquifer parameters. 
 %
 % Inputs:
 %   p - (num_param x 1) is the vector of aquifer parameters
