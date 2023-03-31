@@ -20,6 +20,6 @@ At a high level, the code in this repository takes raw signals as measured durin
 The code and data are provided as open source under the GNU General Public License v3.0. It is provided without warranty, but should perform as described in the manuscript when executed without modification. If you would like to use any of the code in this repository for research, software, or publications, we ask that you provide a citation to the code and journal article (See references below).
 
 ## References
-Patterson, Jeremy R., and M. Cardiff. 2022. Aquifer Characterization and Uncertainty in Multi-Frequency Oscillatory Flow Tests: Approach and Insights. Groundwater 60, no. 2: 180–191, https://doi.org/10.1111/gwat.13134.
-
 Patterson, Jeremy R., and M. Cardiff. 2023. Do Simple Analytical Models Capture Complex Frature Hydraulics? Oscillatory Flow Tests Suggest Not. Groundwater, https://doi.org/10.1111/gwat.13297
+
+Patterson, Jeremy R., and M. Cardiff. 2022. Aquifer Characterization and Uncertainty in Multi-Frequency Oscillatory Flow Tests: Approach and Insights. Groundwater 60, no. 2: 180–191, https://doi.org/10.1111/gwat.13134
